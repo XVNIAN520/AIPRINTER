@@ -7,7 +7,7 @@ from PIL import Image
 from gui_constants import RAW_PHOTO_PATH, PROCESSED_PHOTO_PATH
 
 # ========== 复用你原有AI绘图的API配置 ==========
-ARK_API_KEY = "532fb968-10c1-4963-9235-0ca21872dd66"
+ARK_API_KEY = ""
 MODEL_ID = "ep-20260414192828-b5wrm"
 ARK_API_URL = "https://ark.cn-beijing.volces.com/api/v3/images/generations"
 
