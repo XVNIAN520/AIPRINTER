@@ -1,0 +1,436 @@
+import tkinter as tk
+import tkinter.font
+import threading, time, math
+from PIL import Image, ImageDraw, ImageFont
+from PIL import ImageTk
+
+from record import record_audio
+from voice_to_text import audio_to_text
+from ai_draw import generate_draw
+from limit_hight import limit_image_height
+from print_image import print_final_image
+from pinyin_data import PINYIN_MAP
+
+# ── 配色 ──
+BG       = "#0a0a0f"
+SURFACE  = "#14141f"
+ACCENT   = "#8b5cf6"
+ACCENT2  = "#06b6d4"
+TEXT1    = "#f8fafc"
+TEXT2    = "#64748b"
+SUCCESS  = "#22c55e"
+WARN     = "#f59e0b"
+FONT = "TkDefaultFont"
+
+# ── 工具函数 ──
+def lerp_color(c1,c2,t): return tuple(int(a+(b-a)*t) for a,b in zip(c1,c2))
+def hex2rgb(h): return int(h[1:3],16),int(h[3:5],16),int(h[5:7],16)
+
+# ── 渐变按钮 ──
+class GradientButton(tk.Canvas):
+    def __init__(self,master,text,size=16,w=260,h=54,color=ACCENT,command=None,**kw):
+        r=kw.pop("radius",h//2); super().__init__(master,width=w,height=h,bg=BG,highlightthickness=0,cursor="hand2",**kw)
+        self.color,self.command,self.r,self.w,self.h=color,command,r,w,h
+        self._normal(); self.bind("<Enter>",self._hover); self.bind("<Leave>",self._normal)
+        self.bind("<Button-1>",lambda e:command and command())
+        self.tx=self.create_text(w//2,h//2,text=text,font=(FONT,size,"bold"),fill="#fff",tags="txt")
+    def _normal(self,e=None):
+        self.delete("btn"); r,w,h=self.r,self.w,self.h
+        steps=20
+        for i in range(steps):
+            t=i/steps; y0=h*i//steps; y1=h*(i+1)//steps
+            rgb=lerp_color(hex2rgb(self.color),hex2rgb("#4c1d95"),t*0.4)
+            self.create_rectangle(0,y0,w,y1,fill=f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}",outline="",tags="btn")
+        pts=self._pts(r,w,h,0)
+        self.create_polygon(pts,smooth=True,fill="",outline=self._lighten(self.color,20),width=1,tags="btn")
+        self.tag_raise("txt")
+    def _hover(self,e):
+        self.delete("btn"); r,w,h=self.r,self.w,self.h
+        steps=20
+        for i in range(steps):
+            t=i/steps; y0=h*i//steps; y1=h*(i+1)//steps
+            rgb=lerp_color(hex2rgb(self.color),hex2rgb("#6d28d9"),t*0.5)
+            self.create_rectangle(0,y0,w,y1,fill=f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}",outline="",tags="btn")
+        self.create_polygon(self._pts(r,w,h,2),smooth=True,fill="",outline=self._lighten(self.color,60),width=3,tags="btn")
+        self.tag_raise("txt")
+    def _pts(self,r,w,h,pad):
+        p=pad; return [r+p,p,w-r-p,p,w-p,p,w-p,r+p,w-p,h-r-p,w-p,h-p,w-r-p,h-p,r+p,h-p,p,h-p,p,h-r-p,p,r+p,p,p,r+p,p]
+    def _lighten(self,h,a): r=min(255,int(h[1:3],16)+a); g=min(255,int(h[3:5],16)+a); b=min(255,int(h[5:7],16)+a); return f"#{r:02x}{g:02x}{b:02x}"
+
+# ── 首页品牌图标 ──
+class BrandIcon(tk.Canvas):
+    def __init__(self,master,**kw):
+        super().__init__(master,width=140,height=120,bg=BG,highlightthickness=0,**kw)
+        c=ACCENT
+        # 打印机主体
+        self.create_rounded_rect(25,30,115,95,r=14,fill=c,outline="")
+        self.create_rounded_rect(35,40,105,65,r=8,fill="#1a1a2e",outline="")
+        # 纸张
+        self.create_rectangle(45,10,70,38,fill="#e2e8f0",outline=c,width=2)
+        self.create_line(50,20,65,20,fill=c,width=2); self.create_line(50,27,62,27,fill=c,width=2)
+        # 按钮
+        self.create_oval(102,72,112,82,fill=ACCENT2,outline="")
+        self.create_oval(102,55,112,65,fill=WARN,outline="")
+    def create_rounded_rect(self,x1,y1,x2,y2,r=10,**kw):
+        pts=[x1+r,y1,x2-r,y1, x2,y1,x2,y1+r, x2,y2-r,x2,y2, x2-r,y2,x1+r,y2, x1,y2,x1,y2-r, x1,y1+r,x1,y1, x1+r,y1]
+        return self.create_polygon(pts,smooth=True,**kw)
+
+# ── 图片卡片（带选中动画）──
+class ImageCard(tk.Canvas):
+    def __init__(self,master,index,command,**kw):
+        super().__init__(master,width=220,height=220,bg=SURFACE,highlightthickness=0,cursor="hand2",**kw)
+        self.index,self.command,self.selected=index,command,False
+        self.img_id=None; self.scale=1.0; self._ox=110; self._oy=110
+        self.border=self.create_rectangle(2,2,218,218,outline=ACCENT,width=0)
+        self.placeholder=self.create_text(110,110,text=f"图片 {index+1}",font=(FONT,13),fill=TEXT2)
+        self.bind("<Button-1>",self._click)
+        self.bind("<Enter>",self._enter); self.bind("<Leave>",self._leave)
+    def _enter(self,e):
+        if not self.selected: self.itemconfig(self.border,width=2,outline=ACCENT2)
+    def _leave(self,e):
+        if not self.selected: self.itemconfig(self.border,width=0)
+    def _click(self,e): self.command(self.index)
+    def set_image(self,photo):
+        if self.img_id:self.delete(self.img_id)
+        self.img_id=self.create_image(110,110,image=photo)
+        self.itemconfig(self.placeholder,state="hidden")
+    def select(self):
+        self.selected=True; self.itemconfig(self.border,width=3,outline=ACCENT2)
+        self._animate_select(1.0)
+    def deselect(self):
+        self.selected=False; self._animate_deselect(1.05)
+    def _animate_select(self,t):
+        if t<1.14:
+            s=1+0.14*math.sin(t*math.pi/2)
+            self.scale(t,self._ox,self._oy,s,s)
+            self.after(16,self._animate_select,t+0.08)
+        else: self.scale(t,self._ox,self._oy,1.14,1.14)
+    def _animate_deselect(self,t):
+        if t>1.0:
+            self.scale(t,self._ox,self._oy,t,t)
+            self.after(16,self._animate_deselect,t-0.02)
+        else:
+            if not self.selected:
+                self.itemconfig(self.border,width=0)
+            self.scale(t,self._ox,self._oy,1,1)
+    def scale(self,origin,ox,oy,sx,sy): pass  # tk.Canvas limited, skip real scale
+    def reset(self):
+        if self.img_id: self.delete(self.img_id); self.img_id=None
+        self.itemconfig(self.placeholder,state="normal")
+        self.itemconfig(self.border,width=0); self.selected=False
+
+# ── 声波动画 ──
+class Waveform(tk.Canvas):
+    def __init__(self,master,**kw):
+        super().__init__(master,width=300,height=80,bg=BG,highlightthickness=0,**kw)
+        self.bars=[self.create_rectangle(0,0,0,0,fill=ACCENT,outline="") for _ in range(9)]
+        self.running=False
+    def start(self):
+        self.running=True; self._tick()
+    def stop(self):
+        self.running=False
+        for b in self.bars: self.coords(b,0,0,0,0)
+    def _tick(self):
+        if not self.running: return
+        import random
+        w=300; gap=w//9
+        for i,b in enumerate(self.bars):
+            h=random.randint(6,60)
+            x=gap*i+6; self.coords(b,x,40-h//2,x+gap-12,40+h//2)
+        self.after(80,self._tick)
+
+# ── 旋转 Spinner ──
+class Spinner(tk.Canvas):
+    def __init__(self,master,size=60,**kw):
+        super().__init__(master,width=size+10,height=size+10,bg=BG,highlightthickness=0,**kw)
+        self.size,self.angle,self.running=size,0,False
+        self.arc=self.create_arc(5,5,size+5,size+5,start=0,extent=90,outline=ACCENT2,width=3,style="arc")
+    def start(self):
+        self.running=True; self._spin()
+    def stop(self):
+        self.running=False; self.delete("all")
+    def _spin(self):
+        if not self.running: return
+        self.angle=(self.angle+20)%360
+        self.delete("all")
+        self.create_arc(5,5,self.size+5,self.size+5,start=self.angle,extent=100,outline=ACCENT2,width=3,style="arc")
+        self.after(40,self._spin)
+
+# ── 根窗口 ──
+root=tk.Tk()
+_candidates = ["Noto Sans CJK SC","WenQuanYi Micro Hei","Noto Sans SC","Source Han Sans SC"]
+_families = set(tk.font.families())
+FONT = next((f for f in _candidates if f in _families), "TkDefaultFont")
+root.overrideredirect(True)
+root.geometry("1024x668+200+60"); root.configure(bg=BG)
+
+# 标题栏
+bar=tk.Frame(root,bg="#050508",height=38); bar.pack(fill="x"); bar.propagate(False)
+cbtn=tk.Label(bar,text="×",font=(FONT,16),fg=TEXT2,bg="#050508",padx=18,cursor="hand2")
+cbtn.pack(side="right",fill="y")
+cbtn.bind("<Enter>",lambda e:cbtn.config(bg="#dc2626",fg="#fff"))
+cbtn.bind("<Leave>",lambda e:cbtn.config(bg="#050508",fg=TEXT2))
+cbtn.bind("<Button-1>",lambda e:root.destroy())
+tk.Label(bar,text="  AI 打印机  v2.0",font=(FONT,10),fg=TEXT2,bg="#050508").pack(side="left")
+def move_start(e): root.x,root.y=e.x,e.y
+def move_do(e): root.geometry(f"+{e.x_root-root.x}+{e.y_root-root.y}")
+bar.bind("<Button-1>",move_start); bar.bind("<B1-Motion>",move_do)
+
+# 主区域
+main=tk.Canvas(root,bg=BG,highlightthickness=0); main.pack(fill="both",expand=True)
+# 微妙渐变
+for i in range(40):
+    t=i/40; r=int(10+5*t); g=int(10+6*t); b=int(15+12*t)
+    y0=630*i//40; y1=630*(i+1)//40
+    main.create_rectangle(0,y0,1024,y1,fill=f"#{r:02x}{g:02x}{b:02x}",outline="")
+
+container=tk.Frame(main,bg=""); container.place(relwidth=1,relheight=1)
+
+gen_imgs=[]; sel_img=None; rec_text=""
+p1=p2=p3=None
+
+# ── 动画工具 ──
+_timer=None
+def dots(label,base):
+    def s(n=0):
+        global _timer
+        if not getattr(label,"_r",True):return
+        d="."*(n%4); label.config(text=base+d+" "*(3-len(d)))
+        _timer=label.after(350,s,n+1)
+    label._r=True;s()
+def stop_d(label):
+    global _timer; label._r=False
+    if _timer:label.after_cancel(_timer);_timer=None
+
+def switch(page):
+    page.tkraise()
+
+# ── 业务 ──
+def go_record():
+    switch(p2); wave.start(); dots(rlbl,"正在录音")
+    threading.Thread(target=do_record,daemon=True).start()
+def do_record():
+    global rec_text
+    try:
+        record_audio()
+        rec_text=audio_to_text()
+    except Exception as e:
+        rec_text=f"错误：{e}"
+    finally:
+        root.after(0,lambda t=rec_text:show_text(t))
+def show_text(t):
+    try:
+        stop_d(rlbl); wave.stop()
+    except: pass
+    res.delete(0,'end'); res.insert(0, t); switch(p3)
+def go_gen():
+    switch(pg); spin.start(); dots(glbl,"正在绘制")
+    threading.Thread(target=do_gen,daemon=True).start()
+def do_gen():
+    global gen_imgs
+    gen_imgs=[]
+    try:
+        def on_img(path,idx):
+            gen_imgs.append(path)
+            root.after(0,lambda p=path,i=idx:on_one_img(p,i))
+        from ai_draw import generate_draw
+        prompt = res.get().strip()
+        generate_draw(on_image=on_img, prompt=prompt)
+    except Exception as e: print(e)
+    finally:
+        root.after(0,on_gen_done)
+def on_one_img(path,idx):
+    global pi1,pi2,pi3
+    if idx==0:
+        try:stop_d(glbl);spin.stop()
+        except:pass
+        switch(p4)
+    img=Image.open(path).resize((180,180))
+    photo=ImageTk.PhotoImage(img)
+    if idx==0:pi1=photo;c1.set_image(photo)
+    elif idx==1:pi2=photo;c2.set_image(photo)
+    else:pi3=photo;c3.set_image(photo)
+def on_gen_done():
+    pass
+def show_pics():
+    try: stop_d(glbl); spin.stop()
+    except: pass
+    global pi1,pi2,pi3
+    switch(p4)
+    def load_next(idx):
+        global pi1,pi2,pi3
+        if idx>=len(gen_imgs): return
+        p=gen_imgs[idx]
+        img=Image.open(p).resize((180,180))
+        photo=ImageTk.PhotoImage(img)
+        if idx==0:pi1=photo;c1.set_image(photo)
+        elif idx==1:pi2=photo;c2.set_image(photo)
+        else:pi3=photo;c3.set_image(photo)
+        root.after(300,load_next,idx+1)
+    load_next(0)
+def pick(i):
+    global sel_img; sel_img=gen_imgs[i]
+    for ci in(c1,c2,c3):ci.deselect()
+    [c1,c2,c3][i].select(); stat.config(text=f"已选择图片 {i+1}",font=(FONT,15,"bold"),fg="#fbbf24")
+def go_print():
+    if not sel_img: stat.config(text="请先选择一张图片",font=(FONT,15,"bold"),fg=WARN); return
+    switch(p5); threading.Thread(target=do_print,daemon=True).start()
+def do_print():
+    try: limit_image_height(sel_img); print_final_image()
+    except Exception as e: print(e)
+    finally: root.after(0,fin)
+def fin():
+    prt.config(text="打印完成",fg=SUCCESS); root.after(2500,home)
+def home():
+    global sel_img,rec_text,gen_imgs
+    sel_img=None;rec_text="";gen_imgs=[]
+    try: stop_d(rlbl); wave.stop()
+    except: pass
+    try: stop_d(glbl); spin.stop()
+    except: pass
+    c1.reset();c2.reset();c3.reset(); stat.config(text="点击图片选择",fg=TEXT2)
+    res.delete(0,'end'); rlbl.config(text=""); glbl.config(text=""); prt.config(text="")
+    switch(p1)
+
+# ── 页面 ──
+def mk(): f=tk.Frame(container,bg=BG); f.place(relwidth=1,relheight=1); return f
+
+# P1 首页
+p1=mk()
+tk.Frame(p1,bg=BG,height=70).pack()
+BrandIcon(p1).pack(pady=10)
+tk.Label(p1,text="AI 打印机",font=(FONT,44,"bold"),fg=TEXT1,bg=BG).pack(pady=6)
+tk.Label(p1,text="语音输入  ·  AI 绘图  ·  热敏打印",font=(FONT,14),fg=TEXT2,bg=BG).pack(pady=4)
+GradientButton(p1,"开始录音",size=22,w=300,h=60,command=go_record).pack(pady=40)
+tk.Label(p1,text="Powered by RK3588",font=(FONT,9),fg="#333",bg=BG).pack(side="bottom",pady=20)
+
+# P2 录音
+p2=mk()
+tk.Frame(p2,bg=BG,height=100).pack()
+tk.Label(p2,text="🎤",font=(FONT,56),bg=BG).pack(pady=20)
+wave=Waveform(p2); wave.pack(pady=10)
+rlbl=tk.Label(p2,text="",font=(FONT,22,"bold"),fg=ACCENT,bg=BG); rlbl.pack()
+rb2=tk.Label(p2,text="返回",font=(FONT,13),fg=TEXT2,bg=BG,cursor="hand2")
+rb2.pack(side="bottom",pady=24)
+rb2.bind("<Enter>",lambda e:rb2.config(fg=ACCENT2))
+rb2.bind("<Leave>",lambda e:rb2.config(fg=TEXT2))
+rb2.bind("<Button-1>",lambda e:home())
+
+# ── 内置键盘 ──
+def kb_insert(char):
+    try: res.insert(tk.INSERT, char)
+    except: pass
+
+def kb_back():
+    try:
+        pos = res.index(tk.INSERT)
+        if pos > 0: res.delete(pos - 1)
+    except: pass
+
+def kb_clear():
+    try: res.delete(0, 'end')
+    except: pass
+
+def kb_left():
+    try:
+        pos = res.index(tk.INSERT)
+        if pos > 0: res.icursor(pos - 1)
+    except: pass
+
+def kb_right():
+    try:
+        pos = res.index(tk.INSERT)
+        if pos < len(res.get()): res.icursor(pos + 1)
+    except: pass
+
+def make_key(parent, text, cmd, w=6, c=SURFACE):
+    b = tk.Label(parent, text=text, font=(FONT, 15), fg=TEXT1, bg=c,
+                 width=w, height=2, cursor="hand2", relief="flat")
+    b.bind("<Button-1>", lambda e, f=cmd: f())
+    b.bind("<Enter>", lambda e: b.config(bg=ACCENT, fg="#fff"))
+    b.bind("<Leave>", lambda e: b.config(bg=c, fg=TEXT1))
+    return b
+
+# P3 结果
+p3=mk()
+tk.Frame(p3,bg=BG,height=50).pack()
+tk.Label(p3,text="识别结果",font=(FONT,14),fg=TEXT2,bg=BG).pack(pady=4)
+cf=tk.Frame(p3,bg=SURFACE); cf.pack(pady=6,ipadx=70,ipady=16)
+res=tk.Entry(cf,font=(FONT,22,"bold"),fg=TEXT1,bg=SURFACE,width=28,justify="center",relief="flat",insertbackground=TEXT1); res.pack()
+# 键盘
+kb = tk.Frame(p3, bg=BG); kb.pack(pady=4)
+rows = [
+    [('Q',1),('W',1),('E',1),('R',1),('T',1),('Y',1),('U',1),('I',1),('O',1),('P',1)],
+    [('A',1),('S',1),('D',1),('F',1),('G',1),('H',1),('J',1),('K',1),('L',1)],
+    [('Z',1),('X',1),('C',1),('V',1),('B',1),('N',1),('M',1),('，',1),('。',1)],
+    [('←', 3, kb_left), ('→', 3, kb_right), ('␣', 10, lambda: kb_insert(' ')), ('删除', 5, kb_back), ('清空', 5, kb_clear)],
+]
+for row in rows:
+    rf = tk.Frame(kb, bg=BG); rf.pack()
+    for item in row:
+        if len(item) == 3:
+            text, w, cmd = item
+        else:
+            text, w = item
+            cmd = lambda c=text: kb_insert(c)
+        make_key(rf, text, cmd, w).pack(side="left", padx=2)
+# 常用中文字
+cn_chars = [
+    "的一是不了在有人我他这中大来上个国时要生到以们",
+    "就出会可主发年动同工也能下过子说产种面而方后多",
+]
+cn_panel = tk.Frame(p3, bg=BG); cn_panel.pack(pady=2)
+for line in cn_chars:
+    lf = tk.Frame(cn_panel, bg=BG); lf.pack()
+    for ch in line:
+        make_key(lf, ch, lambda c=ch: kb_insert(c), w=4, c="#1a1a2e").pack(side="left", padx=1)
+GradientButton(p3,"重新录音",size=16,w=200,color=ACCENT,command=go_record).pack(pady=(6,4))
+GradientButton(p3,"开始生成图片",size=18,w=280,color=ACCENT2,command=go_gen).pack(pady=(4,16))
+rb3=tk.Label(p3,text="返回",font=(FONT,13),fg=TEXT2,bg=BG,cursor="hand2")
+rb3.pack(side="bottom",pady=20)
+rb3.bind("<Enter>",lambda e:rb3.config(fg=ACCENT2))
+rb3.bind("<Leave>",lambda e:rb3.config(fg=TEXT2))
+rb3.bind("<Button-1>",lambda e:home())
+
+# PG 生成中
+pg=mk()
+tk.Frame(pg,bg=BG,height=80).pack()
+tk.Label(pg,text="AI 正在创作",font=(FONT,24,"bold"),fg=TEXT1,bg=BG).pack(pady=20)
+spin=Spinner(pg); spin.pack(pady=15)
+glbl=tk.Label(pg,text="",font=(FONT,16),fg=ACCENT,bg=BG); glbl.pack(pady=8)
+rbg=tk.Label(pg,text="返回",font=(FONT,13),fg=TEXT2,bg=BG,cursor="hand2")
+rbg.pack(side="bottom",pady=24)
+rbg.bind("<Enter>",lambda e:rbg.config(fg=ACCENT2))
+rbg.bind("<Leave>",lambda e:rbg.config(fg=TEXT2))
+rbg.bind("<Button-1>",lambda e:home())
+
+# P4 选图
+p4=mk()
+tk.Frame(p4,bg=BG,height=25).pack()
+tk.Label(p4,text="选择喜欢的图片",font=(FONT,22,"bold"),fg=TEXT1,bg=BG).pack(pady=12)
+row=tk.Frame(p4,bg=BG); row.pack(pady=6)
+c1=ImageCard(row,0,pick);c1.grid(row=0,column=0,padx=16)
+c2=ImageCard(row,1,pick);c2.grid(row=0,column=1,padx=16)
+c3=ImageCard(row,2,pick);c3.grid(row=0,column=2,padx=16)
+stat=tk.Label(p4,text="点击图片选择",font=(FONT,13),fg=TEXT2,bg=BG); stat.pack(pady=10)
+GradientButton(p4,"开始打印",size=18,w=240,command=go_print).pack(pady=4)
+rb4=tk.Label(p4,text="返回",font=(FONT,13),fg=TEXT2,bg=BG,cursor="hand2")
+rb4.pack(side="bottom",pady=24)
+rb4.bind("<Enter>",lambda e:rb4.config(fg=ACCENT2))
+rb4.bind("<Leave>",lambda e:rb4.config(fg=TEXT2))
+rb4.bind("<Button-1>",lambda e:home())
+
+# P5 打印
+p5=mk()
+tk.Frame(p5,bg=BG,height=100).pack()
+tk.Label(p5,text="正在打印",font=(FONT,26,"bold"),fg=TEXT1,bg=BG).pack(pady=20)
+tk.Label(p5,text="🖨",font=(FONT,56),bg=BG).pack()
+prt=tk.Label(p5,text="",font=(FONT,16),fg=WARN,bg=BG); prt.pack(pady=12)
+rb5=tk.Label(p5,text="返回",font=(FONT,13),fg=TEXT2,bg=BG,cursor="hand2")
+rb5.pack(side="bottom",pady=24)
+rb5.bind("<Enter>",lambda e:rb5.config(fg=ACCENT2))
+rb5.bind("<Leave>",lambda e:rb5.config(fg=TEXT2))
+rb5.bind("<Button-1>",lambda e:home())
+
+p1.tkraise()
+root.mainloop()

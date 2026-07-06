@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=AI 打印机
+Comment=AI 语音打印助手
+Exec=/home/elf/print/run_thinker.sh
+Icon=printer
+Terminal=false
+Type=Application
+Categories=Utility;

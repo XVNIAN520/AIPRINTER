@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=AI 打印机
+Comment=AI 打印机 - 语音拍照热敏打印
+Exec=/home/elf/final/start_thinker.sh
+Icon=/home/elf/final/icon.png
+Terminal=false
+Categories=Graphics;
