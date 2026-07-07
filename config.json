@@ -8,7 +8,7 @@
     {
       "model_name": "deepseek-chat",
       "model": "deepseek/deepseek-chat",
-      "api_key": "sk-2aeade78bbda4eaeb786f7a24074ab4f",
+      "api_key": "",
       "api_base": "https://api.deepseek.com"
     }
   ]
