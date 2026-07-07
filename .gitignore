@@ -20,3 +20,7 @@ outputs/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Config files (contains API keys)
+config.json
+config.example.json

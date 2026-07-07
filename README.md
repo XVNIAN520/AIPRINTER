@@ -87,7 +87,7 @@ pip install -r requirements.txt
 - `gui_constants.py`：摄像头设备号、串口路径、图片保存路径
 - `voice_to_text.py`：Vosk 模型路径
 - `print_image.py`：串口设备路径（`COM_PORT`）
-- `ai_draw.py` / `image_processing.py`：火山方舟 API Key（如需更换）
+- `ai_draw.py` / `image_processing.py`：火山方舟 API Key 和模型 ID（`ARK_API_KEY`、`MODEL_ID`）
 
 ### 5. 运行 GUI
 
@@ -131,8 +131,6 @@ AIPRINTER/
 ├── limit_hight.py         # 图片高度限制工具
 ├── pinyin_data.py         # 拼音数据（语音相关）
 │
-├── config.json            # 运行配置（API Key 等）
-├── config.example.json    # 配置模板（picoclaw 完整示例）
 ├── picoclaw               # picoclaw AI Agent 框架可执行文件
 │
 ├── ai-printer.desktop     # Linux 桌面快捷方式
@@ -155,10 +153,10 @@ AIPRINTER/
 
 ## API 说明
 
-图像生成使用**火山方舟（Volcengine Ark）** `ep-20260414192828-b5wrm` 模型，需自行申请 API Key：
+图像生成使用**火山方舟（Volcengine Ark）** 服务，需自行申请 API Key：
 
 - 申请地址：https://www.volcengine.com/product/ark
-- 配置位置：`ai_draw.py` 和 `image_processing.py` 中的 `ARK_API_KEY`
+- 配置位置：`ai_draw.py` 和 `image_processing.py` 中的 `ARK_API_KEY` 和 `MODEL_ID`
 
 ## 许可证
 

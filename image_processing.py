@@ -8,7 +8,7 @@ from gui_constants import RAW_PHOTO_PATH, PROCESSED_PHOTO_PATH
 
 # ========== 复用你原有AI绘图的API配置 ==========
 ARK_API_KEY = ""
-MODEL_ID = "ep-20260414192828-b5wrm"
+MODEL_ID = ""
 ARK_API_URL = "https://ark.cn-beijing.volces.com/api/v3/images/generations"
 
 # ========== 线稿提示词 ==========
